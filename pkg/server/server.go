@@ -14,10 +14,10 @@ import (
 )
 
 type AnalysisRequest struct {
-	Type        string `json:"type"`
-	Token       string `json:"token"`
-	Repository  string `json:"repository"`
-	PullRequest int    `json:"pullRequest"`
+	Type        repo.ProviderType `json:"type"`
+	Token       string            `json:"token"`
+	Repository  string            `json:"repository"`
+	PullRequest int               `json:"pullRequest"`
 }
 
 type AnalysisResponse struct {
@@ -58,66 +58,23 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
-	// Only allow POST requests
-	if r.Method != http.MethodPost {
-		log.Printf("Method not allowed: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Ensure content type is application/json
-	if r.Header.Get("Content-Type") != "application/json" {
-		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
-		return
-	}
-
-	// Read the request body
-	body, err := io.ReadAll(r.Body)
+	// Validate request and parse body
+	req, err := s.validate(w, r)
 	if err != nil {
-		log.Printf("Error reading request body: %v", err)
-		http.Error(w, "Error reading request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// Parse the request body
-	var req AnalysisRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		log.Printf("Error parsing JSON: %v", err)
-		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-		return
-	}
-
-	// Validate request
-	if req.Type != "github" && req.Type != "gitlab" {
-		sendErrorResponse(w, "Invalid type. Must be 'github' or 'gitlab'", http.StatusBadRequest)
-		return
-	}
-	if req.Token == "" {
-		sendErrorResponse(w, "Token is required", http.StatusBadRequest)
-		return
-	}
-	if req.Repository == "" {
-		sendErrorResponse(w, "Repository is required", http.StatusBadRequest)
-		return
-	}
-	if req.PullRequest <= 0 {
-		sendErrorResponse(w, "Pull request number must be positive", http.StatusBadRequest)
 		return
 	}
 
 	// Create repository client based on provider
 	var repoClient repo.RepositoryClient
 	switch req.Type {
-	case "github":
+	case repo.GitHub:
 		authProvider := auth.NewGitHubAuth(req.Token)
 		if err := authProvider.Authenticate(); err != nil {
 			sendErrorResponse(w, fmt.Sprintf("GitHub authentication failed: %v", err), http.StatusUnauthorized)
 			return
 		}
 		repoClient = repo.NewGitHubClient(authProvider.GetClient().(*github.Client))
-	case "gitlab":
+	case repo.GitLab:
 		authProvider := auth.NewGitLabAuth(req.Token)
 		if err := authProvider.Authenticate(); err != nil {
 			sendErrorResponse(w, fmt.Sprintf("GitLab authentication failed: %v", err), http.StatusUnauthorized)
@@ -177,4 +134,57 @@ func sendErrorResponse(w http.ResponseWriter, errorMsg string, statusCode int) {
 		Status: "error",
 		Error:  errorMsg,
 	})
+}
+
+func (s *Server) validate(w http.ResponseWriter, r *http.Request) (*AnalysisRequest, error) {
+	// Only allow POST requests
+	if r.Method != http.MethodPost {
+		log.Printf("Method not allowed: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return nil, fmt.Errorf("method not allowed")
+	}
+
+	// Ensure content type is application/json
+	if r.Header.Get("Content-Type") != "application/json" {
+		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return nil, fmt.Errorf("invalid content type")
+	}
+
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error reading request body: %v", err)
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return nil, fmt.Errorf("error reading request body")
+	}
+	defer r.Body.Close()
+
+	// Parse the request body
+	var req AnalysisRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		log.Printf("Error parsing JSON: %v", err)
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return nil, fmt.Errorf("invalid JSON format")
+	}
+
+	// Validate request
+	if !req.Type.IsValid() {
+		sendErrorResponse(w, fmt.Sprintf("Invalid type. Must be one of: %s, %s", repo.GitHub, repo.GitLab), http.StatusBadRequest)
+		return nil, fmt.Errorf("invalid type")
+	}
+	if req.Token == "" {
+		sendErrorResponse(w, "Token is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("token is required")
+	}
+	if req.Repository == "" {
+		sendErrorResponse(w, "Repository is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("repository is required")
+	}
+	if req.PullRequest <= 0 {
+		sendErrorResponse(w, "Pull request number must be positive", http.StatusBadRequest)
+		return nil, fmt.Errorf("pull request number must be positive")
+	}
+
+	return &req, nil
 }
