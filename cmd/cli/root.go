@@ -38,7 +38,19 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 
 	// Get token if not specified
 	if token == "" {
+		// Try to get token from environment first
 		token = auth.GetTokenFromEnv(provider)
+
+		// If not in environment, try to get from cache
+		if token == "" {
+			cachedToken, err := auth.GetCachedToken(provider)
+			if err != nil {
+				fmt.Printf("Warning: Failed to load cached token: %v\n", err)
+			}
+			token = cachedToken
+		}
+
+		// If still no token, prompt user
 		if token == "" {
 			fmt.Printf("Enter %s personal access token: ", provider)
 			reader := bufio.NewReader(os.Stdin)
@@ -47,6 +59,11 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to read input: %v", err)
 			}
 			token = strings.TrimSpace(input)
+
+			// Save the token to cache
+			if err := auth.SaveToken(provider, token); err != nil {
+				fmt.Printf("Warning: Failed to save token to cache: %v\n", err)
+			}
 		}
 	}
 

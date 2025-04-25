@@ -120,25 +120,51 @@ func (c *GitHubClient) GetBlameInfo(repoFullName string, prNumber int, files []s
 
 	blameInfo := make(map[string]BlameInfo)
 
-	for _, file := range files {
-		// Get blame information for each file
+	for _, filename := range files {
+		// Get the file's commit history
 		commits, _, err := c.client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
-			Path: file,
+			Path: filename,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get commits for file %s: %v", file, err)
+			return nil, fmt.Errorf("failed to get commits for file %s: %v", filename, err)
 		}
 
+		// For each commit, count the number of lines it modified
 		for _, commit := range commits {
-			author := commit.GetAuthor().GetName()
+			// Try to get author name in order of preference
+			var author string
+			if commit.GetAuthor() != nil {
+				author = commit.GetAuthor().GetLogin()
+				if author == "" {
+					author = commit.GetAuthor().GetName()
+				}
+			}
+			if author == "" && commit.GetCommitter() != nil {
+				author = commit.GetCommitter().GetLogin()
+				if author == "" {
+					author = commit.GetCommitter().GetName()
+				}
+			}
 			if author == "" {
-				author = commit.GetAuthor().GetEmail()
+				author = "Unknown Author"
 			}
 
-			info := blameInfo[author]
-			info.User = author
-			info.Lines += 1 // Each commit represents at least one line change
-			blameInfo[author] = info
+			// Get the commit details to see what files were modified
+			commitDetails, _, err := c.client.Repositories.GetCommit(ctx, owner, repo, commit.GetSHA(), nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get commit details: %v", err)
+			}
+
+			// Count lines modified in this commit for this file
+			for _, file := range commitDetails.Files {
+				if file.GetFilename() == filename {
+					info := blameInfo[author]
+					info.User = author
+					info.Lines += file.GetChanges()
+					blameInfo[author] = info
+					break
+				}
+			}
 		}
 	}
 
@@ -223,25 +249,40 @@ func (c *GitLabClient) ListPullRequests(repoFullName string) ([]PullRequest, err
 func (c *GitLabClient) GetBlameInfo(repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
 	blameInfo := make(map[string]BlameInfo)
 
-	for _, file := range files {
-		// Get blame information for each file
+	for _, filename := range files {
+		// Get the file's commit history
 		commits, _, err := c.client.Commits.ListCommits(repoFullName, &gitlab.ListCommitsOptions{
-			Path: gitlab.String(file),
+			Path: gitlab.String(filename),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get commits for file %s: %v", file, err)
+			return nil, fmt.Errorf("failed to get commits for file %s: %v", filename, err)
 		}
 
+		// For each commit, count the number of lines it modified
 		for _, commit := range commits {
 			author := commit.AuthorName
 			if author == "" {
 				author = commit.AuthorEmail
 			}
 
-			info := blameInfo[author]
-			info.User = author
-			info.Lines += 1 // Each commit represents at least one line change
-			blameInfo[author] = info
+			// Get the diff for this commit
+			diffs, _, err := c.client.Commits.GetCommitDiff(repoFullName, commit.ID, &gitlab.GetCommitDiffOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to get commit diff: %v", err)
+			}
+
+			// Count lines modified in this commit for this file
+			for _, diff := range diffs {
+				if diff.NewPath == filename {
+					info := blameInfo[author]
+					info.User = author
+					// Count the number of lines in the diff
+					lines := strings.Split(diff.Diff, "\n")
+					info.Lines += len(lines)
+					blameInfo[author] = info
+					break
+				}
+			}
 		}
 	}
 
