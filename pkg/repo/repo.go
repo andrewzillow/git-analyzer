@@ -78,7 +78,10 @@ func (c *GitHubClient) ListRepositories() ([]Repository, error) {
 
 func (c *GitHubClient) ListPullRequests(repoFullName string) ([]PullRequest, error) {
 	ctx := context.Background()
-	owner, repo := splitRepoFullName(repoFullName)
+	owner, repo, err := splitRepoFullName(repoFullName)
+	if err != nil {
+		return nil, err
+	}
 
 	prs, _, err := c.client.PullRequests.List(ctx, owner, repo, &github.PullRequestListOptions{
 		State:       "open",
@@ -116,7 +119,10 @@ func (c *GitHubClient) ListPullRequests(repoFullName string) ([]PullRequest, err
 
 func (c *GitHubClient) GetBlameInfo(repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
 	ctx := context.Background()
-	owner, repo := splitRepoFullName(repoFullName)
+	owner, repo, err := splitRepoFullName(repoFullName)
+	if err != nil {
+		return nil, err
+	}
 
 	blameInfo := make(map[string]BlameInfo)
 
@@ -342,10 +348,10 @@ func FormatBlameInfo(blameInfo map[string]BlameInfo) string {
 	return sb.String()
 }
 
-func splitRepoFullName(fullName string) (string, string) {
+func splitRepoFullName(fullName string) (string, string, error) {
 	parts := strings.Split(fullName, "/")
 	if len(parts) != 2 {
-		return "", ""
+		return "", "", fmt.Errorf("invalid repository name format: %s. Expected format: owner/repo", fullName)
 	}
-	return parts[0], parts[1]
+	return parts[0], parts[1], nil
 }
