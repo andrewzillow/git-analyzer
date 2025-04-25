@@ -50,31 +50,29 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Authenticate
-	var authProvider auth.AuthProvider
+	// Create repository client based on provider
+	var repoClient repo.RepositoryClient
 	switch provider {
 	case "github":
-		authProvider = auth.NewGitHubAuth(token)
+		authProvider := auth.NewGitHubAuth(token)
+		if err := authProvider.Authenticate(); err != nil {
+			return err
+		}
+		repoClient = repo.NewGitHubClient(authProvider.GetClient().(*github.Client))
 	case "gitlab":
-		authProvider = auth.NewGitLabAuth(token)
+		authProvider := auth.NewGitLabAuth(token)
+		if err := authProvider.Authenticate(); err != nil {
+			return err
+		}
+		repoClient = repo.NewGitLabClient(authProvider.GetClient().(*gitlab.Client))
 	default:
 		return fmt.Errorf("unsupported provider: %s", provider)
 	}
 
-	if err := authProvider.Authenticate(); err != nil {
-		return err
-	}
 	fmt.Printf("Successfully authenticated with %s\n", provider)
 
 	// List repositories
-	var repos []repo.Repository
-	var err error
-	switch provider {
-	case "github":
-		repos, err = repo.ListGitHubRepos(authProvider.GetClient().(*github.Client))
-	case "gitlab":
-		repos, err = repo.ListGitLabRepos(authProvider.GetClient().(*gitlab.Client))
-	}
+	repos, err := repoClient.ListRepositories()
 	if err != nil {
 		return err
 	}
@@ -98,13 +96,7 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 	fmt.Printf("URL: %s\n", selectedRepo.URL)
 
 	// List pull requests
-	var prs []repo.PullRequest
-	switch provider {
-	case "github":
-		prs, err = repo.ListGitHubPullRequests(authProvider.GetClient().(*github.Client), selectedRepo.FullName)
-	case "gitlab":
-		prs, err = repo.ListGitLabPullRequests(authProvider.GetClient().(*gitlab.Client), selectedRepo.FullName)
-	}
+	prs, err := repoClient.ListPullRequests(selectedRepo.FullName)
 	if err != nil {
 		return err
 	}
@@ -135,13 +127,7 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 	fmt.Println(repo.FormatChangedFiles(selectedPR.ChangedFiles))
 
 	// Get blame information
-	var blameInfo map[string]repo.BlameInfo
-	switch provider {
-	case "github":
-		blameInfo, err = repo.GetGitHubBlameInfo(authProvider.GetClient().(*github.Client), selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
-	case "gitlab":
-		blameInfo, err = repo.GetGitLabBlameInfo(authProvider.GetClient().(*gitlab.Client), selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
-	}
+	blameInfo, err := repoClient.GetBlameInfo(selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
 	if err != nil {
 		return err
 	}

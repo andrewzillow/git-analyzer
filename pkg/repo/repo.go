@@ -10,6 +10,13 @@ import (
 	"github.com/xanzy/go-gitlab"
 )
 
+// RepositoryClient defines the interface for repository operations
+type RepositoryClient interface {
+	ListRepositories() ([]Repository, error)
+	ListPullRequests(repoFullName string) ([]PullRequest, error)
+	GetBlameInfo(repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error)
+}
+
 type Repository struct {
 	Name     string
 	FullName string
@@ -31,9 +38,18 @@ type BlameInfo struct {
 	Lines int
 }
 
-func ListGitHubRepos(client *github.Client) ([]Repository, error) {
+// GitHubClient implements RepositoryClient for GitHub
+type GitHubClient struct {
+	client *github.Client
+}
+
+func NewGitHubClient(client *github.Client) *GitHubClient {
+	return &GitHubClient{client: client}
+}
+
+func (c *GitHubClient) ListRepositories() ([]Repository, error) {
 	ctx := context.Background()
-	repos, _, err := client.Repositories.List(ctx, "", &github.RepositoryListOptions{
+	repos, _, err := c.client.Repositories.List(ctx, "", &github.RepositoryListOptions{
 		Sort:        "updated",
 		Direction:   "desc",
 		ListOptions: github.ListOptions{PerPage: 100},
@@ -60,38 +76,11 @@ func ListGitHubRepos(client *github.Client) ([]Repository, error) {
 	return result, nil
 }
 
-func ListGitLabRepos(client *gitlab.Client) ([]Repository, error) {
-	opt := &gitlab.ListProjectsOptions{
-		OrderBy: gitlab.String("updated_at"),
-		Sort:    gitlab.String("desc"),
-		ListOptions: gitlab.ListOptions{
-			PerPage: 100,
-		},
-	}
-
-	projects, _, err := client.Projects.ListProjects(opt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list GitLab repositories: %v", err)
-	}
-
-	var result []Repository
-	for _, project := range projects {
-		result = append(result, Repository{
-			Name:     project.Name,
-			FullName: project.PathWithNamespace,
-			URL:      project.WebURL,
-			Provider: "gitlab",
-		})
-	}
-
-	return result, nil
-}
-
-func ListGitHubPullRequests(client *github.Client, repoFullName string) ([]PullRequest, error) {
+func (c *GitHubClient) ListPullRequests(repoFullName string) ([]PullRequest, error) {
 	ctx := context.Background()
 	owner, repo := splitRepoFullName(repoFullName)
 
-	prs, _, err := client.PullRequests.List(ctx, owner, repo, &github.PullRequestListOptions{
+	prs, _, err := c.client.PullRequests.List(ctx, owner, repo, &github.PullRequestListOptions{
 		State:       "open",
 		ListOptions: github.ListOptions{PerPage: 100},
 	})
@@ -102,7 +91,7 @@ func ListGitHubPullRequests(client *github.Client, repoFullName string) ([]PullR
 	var result []PullRequest
 	for _, pr := range prs {
 		// Get changed files for each PR
-		files, _, err := client.PullRequests.ListFiles(ctx, owner, repo, pr.GetNumber(), &github.ListOptions{PerPage: 100})
+		files, _, err := c.client.PullRequests.ListFiles(ctx, owner, repo, pr.GetNumber(), &github.ListOptions{PerPage: 100})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get changed files: %v", err)
 		}
@@ -125,46 +114,7 @@ func ListGitHubPullRequests(client *github.Client, repoFullName string) ([]PullR
 	return result, nil
 }
 
-func ListGitLabPullRequests(client *gitlab.Client, repoFullName string) ([]PullRequest, error) {
-	opt := &gitlab.ListProjectMergeRequestsOptions{
-		State: gitlab.String("opened"),
-		ListOptions: gitlab.ListOptions{
-			PerPage: 100,
-		},
-	}
-
-	mrs, _, err := client.MergeRequests.ListProjectMergeRequests(repoFullName, opt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list merge requests: %v", err)
-	}
-
-	var result []PullRequest
-	for _, mr := range mrs {
-		// Get changed files for each MR
-		changes, _, err := client.MergeRequests.GetMergeRequestChanges(repoFullName, mr.IID, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get changed files: %v", err)
-		}
-
-		var changedFiles []string
-		for _, change := range changes.Changes {
-			changedFiles = append(changedFiles, change.NewPath)
-		}
-
-		result = append(result, PullRequest{
-			Number:       mr.IID,
-			Title:        mr.Title,
-			State:        mr.State,
-			URL:          mr.WebURL,
-			Provider:     "gitlab",
-			ChangedFiles: changedFiles,
-		})
-	}
-
-	return result, nil
-}
-
-func GetGitHubBlameInfo(client *github.Client, repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
+func (c *GitHubClient) GetBlameInfo(repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
 	ctx := context.Background()
 	owner, repo := splitRepoFullName(repoFullName)
 
@@ -172,7 +122,7 @@ func GetGitHubBlameInfo(client *github.Client, repoFullName string, prNumber int
 
 	for _, file := range files {
 		// Get blame information for each file
-		commits, _, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+		commits, _, err := c.client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
 			Path: file,
 		})
 		if err != nil {
@@ -195,12 +145,87 @@ func GetGitHubBlameInfo(client *github.Client, repoFullName string, prNumber int
 	return blameInfo, nil
 }
 
-func GetGitLabBlameInfo(client *gitlab.Client, repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
+// GitLabClient implements RepositoryClient for GitLab
+type GitLabClient struct {
+	client *gitlab.Client
+}
+
+func NewGitLabClient(client *gitlab.Client) *GitLabClient {
+	return &GitLabClient{client: client}
+}
+
+func (c *GitLabClient) ListRepositories() ([]Repository, error) {
+	opt := &gitlab.ListProjectsOptions{
+		OrderBy: gitlab.String("updated_at"),
+		Sort:    gitlab.String("desc"),
+		ListOptions: gitlab.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	projects, _, err := c.client.Projects.ListProjects(opt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list GitLab repositories: %v", err)
+	}
+
+	var result []Repository
+	for _, project := range projects {
+		result = append(result, Repository{
+			Name:     project.Name,
+			FullName: project.PathWithNamespace,
+			URL:      project.WebURL,
+			Provider: "gitlab",
+		})
+	}
+
+	return result, nil
+}
+
+func (c *GitLabClient) ListPullRequests(repoFullName string) ([]PullRequest, error) {
+	opt := &gitlab.ListProjectMergeRequestsOptions{
+		State: gitlab.String("opened"),
+		ListOptions: gitlab.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(repoFullName, opt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list merge requests: %v", err)
+	}
+
+	var result []PullRequest
+	for _, mr := range mrs {
+		// Get changed files for each MR
+		changes, _, err := c.client.MergeRequests.GetMergeRequestChanges(repoFullName, mr.IID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get changed files: %v", err)
+		}
+
+		var changedFiles []string
+		for _, change := range changes.Changes {
+			changedFiles = append(changedFiles, change.NewPath)
+		}
+
+		result = append(result, PullRequest{
+			Number:       mr.IID,
+			Title:        mr.Title,
+			State:        mr.State,
+			URL:          mr.WebURL,
+			Provider:     "gitlab",
+			ChangedFiles: changedFiles,
+		})
+	}
+
+	return result, nil
+}
+
+func (c *GitLabClient) GetBlameInfo(repoFullName string, prNumber int, files []string) (map[string]BlameInfo, error) {
 	blameInfo := make(map[string]BlameInfo)
 
 	for _, file := range files {
 		// Get blame information for each file
-		commits, _, err := client.Commits.ListCommits(repoFullName, &gitlab.ListCommitsOptions{
+		commits, _, err := c.client.Commits.ListCommits(repoFullName, &gitlab.ListCommitsOptions{
 			Path: gitlab.String(file),
 		})
 		if err != nil {
