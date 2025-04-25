@@ -20,11 +20,26 @@ func TestServer_Validate(t *testing.T) {
 		expectedError  string
 	}{
 		{
-			name:        "valid request",
+			name:        "valid git-blame request",
 			method:      http.MethodPost,
 			contentType: "application/json",
 			requestBody: AnalysisRequest{
 				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"token":       "token",
+					"repository":  "owner/repo",
+					"pullRequest": 1,
+				},
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:        "valid git-log request",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-log",
 				Arguments: map[string]interface{}{
 					"provider":    "github",
 					"token":       "token",

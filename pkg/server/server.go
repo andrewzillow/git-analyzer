@@ -89,8 +89,8 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request) (*AnalysisRequ
 	}
 
 	// Validate request
-	if req.Name != "git-blame" {
-		sendErrorResponse(w, "Invalid name. Only 'git-blame' is supported", http.StatusBadRequest)
+	if req.Name != "git-blame" && req.Name != "git-log" {
+		sendErrorResponse(w, "Invalid name. Must be one of: 'git-blame', 'git-log'", http.StatusBadRequest)
 		return nil, fmt.Errorf("invalid name")
 	}
 
