@@ -65,6 +65,73 @@ By default, the server runs on port 8080. You can specify a different port:
 
 ### API Endpoints
 
+#### GET /prompts
+
+Returns a list of available prompts with their descriptions and required arguments.
+
+Example response:
+```json
+[
+  {
+    "name": "git-blame",
+    "description": "Analyzes the blame information for files in a pull request, showing which authors modified which lines.",
+    "arguments": [
+      {
+        "name": "provider",
+        "description": "The Git provider (github or gitlab)",
+        "required": true
+      },
+      {
+        "name": "token",
+        "description": "Personal access token for authentication",
+        "required": true
+      },
+      {
+        "name": "repository",
+        "description": "Full repository name in the format owner/repo",
+        "required": true
+      },
+      {
+        "name": "pullRequest",
+        "description": "Pull request number",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "git-log",
+    "description": "Returns a success response for the specified repository and pull request.",
+    "arguments": [
+      {
+        "name": "provider",
+        "description": "The Git provider (github or gitlab)",
+        "required": true
+      },
+      {
+        "name": "token",
+        "description": "Personal access token for authentication",
+        "required": true
+      },
+      {
+        "name": "repository",
+        "description": "Full repository name in the format owner/repo",
+        "required": true
+      },
+      {
+        "name": "pullRequest",
+        "description": "Pull request number",
+        "required": true
+      }
+    ]
+  }
+]
+```
+
+Example using curl:
+```bash
+curl http://localhost:8080/prompts
+```
+
 #### POST /messages
 
 Accepts JSON requests with the following format:

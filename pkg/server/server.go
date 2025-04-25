@@ -14,9 +14,8 @@ import (
 )
 
 type AnalysisRequest struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Arguments   map[string]interface{} `json:"arguments"`
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments"`
 }
 
 type AnalysisResponse struct {
@@ -26,26 +25,46 @@ type AnalysisResponse struct {
 	Error   string         `json:"error,omitempty"`
 }
 
+type Argument struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+type Prompt struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Arguments   []Argument `json:"arguments"`
+}
+
 type Server struct {
 	port int
+	mux  *http.ServeMux
 }
 
 func NewServer(port int) *Server {
-	return &Server{
+	mux := http.NewServeMux()
+	server := &Server{
 		port: port,
+		mux:  mux,
 	}
+
+	// Register routes
+	mux.HandleFunc("/messages", server.handleMessages)
+	mux.HandleFunc("/prompts", server.handlePrompts)
+
+	return server
 }
 
 func (s *Server) Start() error {
-	// Create a new mux to handle routes
-	mux := http.NewServeMux()
-	mux.HandleFunc("/messages", s.handleMessages)
-
 	// Add logging middleware
-	handler := loggingMiddleware(mux)
+	handler := loggingMiddleware(s.mux)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	fmt.Printf("Starting server on port %d...\n", s.port)
+	fmt.Printf("Registered routes:\n")
+	fmt.Printf("- GET /prompts\n")
+	fmt.Printf("- POST /messages\n")
 	return http.ListenAndServe(addr, handler)
 }
 
@@ -230,27 +249,108 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get blame information
-	blameInfo, err := repoClient.GetBlameInfo(repository, pullRequest, selectedPR.ChangedFiles)
-	if err != nil {
-		sendErrorResponse(w, fmt.Sprintf("Failed to get blame information: %v", err), http.StatusInternalServerError)
+	// Handle different message types
+	switch req.Name {
+	case "git-blame":
+		// Get blame information
+		blameInfo, err := repoClient.GetBlameInfo(repository, pullRequest, selectedPR.ChangedFiles)
+		if err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to get blame information: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Convert blame info to a simpler map for JSON response
+		blameData := make(map[string]int)
+		for _, info := range blameInfo {
+			blameData[info.User] = info.Lines
+		}
+
+		// Return success response with blame data
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(AnalysisResponse{
+			Status:  "success",
+			Message: "Blame analysis completed",
+			Data:    blameData,
+		})
+
+	case "git-log":
+		// Return success response without any analysis
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(AnalysisResponse{
+			Status:  "success",
+			Message: "Git log request processed",
+		})
+	}
+}
+
+func (s *Server) handlePrompts(w http.ResponseWriter, r *http.Request) {
+	// Only allow GET requests
+	if r.Method != http.MethodGet {
+		log.Printf("Method not allowed: %s", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Convert blame info to a simpler map for JSON response
-	blameData := make(map[string]int)
-	for _, info := range blameInfo {
-		blameData[info.User] = info.Lines
+	prompts := []Prompt{
+		{
+			Name:        "git-blame",
+			Description: "Analyzes the blame information for files in a pull request, showing which authors modified which lines.",
+			Arguments: []Argument{
+				{
+					Name:        "provider",
+					Description: "The Git provider (github or gitlab)",
+					Required:    true,
+				},
+				{
+					Name:        "token",
+					Description: "Personal access token for authentication",
+					Required:    true,
+				},
+				{
+					Name:        "repository",
+					Description: "Full repository name in the format owner/repo",
+					Required:    true,
+				},
+				{
+					Name:        "pullRequest",
+					Description: "Pull request number",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "git-log",
+			Description: "Returns a success response for the specified repository and pull request.",
+			Arguments: []Argument{
+				{
+					Name:        "provider",
+					Description: "The Git provider (github or gitlab)",
+					Required:    true,
+				},
+				{
+					Name:        "token",
+					Description: "Personal access token for authentication",
+					Required:    true,
+				},
+				{
+					Name:        "repository",
+					Description: "Full repository name in the format owner/repo",
+					Required:    true,
+				},
+				{
+					Name:        "pullRequest",
+					Description: "Pull request number",
+					Required:    true,
+				},
+			},
+		},
 	}
 
-	// Return success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(AnalysisResponse{
-		Status:  "success",
-		Message: "Analysis completed",
-		Data:    blameData,
-	})
+	json.NewEncoder(w).Encode(prompts)
 }
 
 func sendErrorResponse(w http.ResponseWriter, errorMsg string, statusCode int) {

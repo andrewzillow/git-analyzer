@@ -181,3 +181,67 @@ func TestServer_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_HandlePrompts(t *testing.T) {
+	server := NewServer(8080)
+
+	tests := []struct {
+		name           string
+		method         string
+		expectedStatus int
+	}{
+		{
+			name:           "valid GET request",
+			method:         http.MethodGet,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "invalid method",
+			method:         http.MethodPost,
+			expectedStatus: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/prompts", nil)
+			w := httptest.NewRecorder()
+
+			server.handlePrompts(w, req)
+
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status code %d, got %d", tt.expectedStatus, w.Code)
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var prompts []Prompt
+				if err := json.NewDecoder(w.Body).Decode(&prompts); err != nil {
+					t.Errorf("Failed to decode response: %v", err)
+				}
+
+				// Verify the structure of the response
+				if len(prompts) != 2 {
+					t.Errorf("Expected 2 prompts, got %d", len(prompts))
+				}
+
+				// Check git-blame prompt
+				blamePrompt := prompts[0]
+				if blamePrompt.Name != "git-blame" {
+					t.Errorf("Expected first prompt to be git-blame, got %s", blamePrompt.Name)
+				}
+				if len(blamePrompt.Arguments) != 4 {
+					t.Errorf("Expected 4 arguments for git-blame, got %d", len(blamePrompt.Arguments))
+				}
+
+				// Check git-log prompt
+				logPrompt := prompts[1]
+				if logPrompt.Name != "git-log" {
+					t.Errorf("Expected second prompt to be git-log, got %s", logPrompt.Name)
+				}
+				if len(logPrompt.Arguments) != 4 {
+					t.Errorf("Expected 4 arguments for git-log, got %d", len(logPrompt.Arguments))
+				}
+			}
+		})
+	}
+}
