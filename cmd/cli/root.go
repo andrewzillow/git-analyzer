@@ -97,6 +97,58 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nSelected repository: %s\n", selectedRepo.FullName)
 	fmt.Printf("URL: %s\n", selectedRepo.URL)
 
+	// List pull requests
+	var prs []repo.PullRequest
+	switch provider {
+	case "github":
+		prs, err = repo.ListGitHubPullRequests(authProvider.GetClient().(*github.Client), selectedRepo.FullName)
+	case "gitlab":
+		prs, err = repo.ListGitLabPullRequests(authProvider.GetClient().(*gitlab.Client), selectedRepo.FullName)
+	}
+	if err != nil {
+		return err
+	}
+
+	if len(prs) == 0 {
+		fmt.Println("\nNo open pull requests found.")
+		return nil
+	}
+
+	// Display pull requests and get selection
+	fmt.Println(repo.FormatPullRequestList(prs))
+	fmt.Print("Select a pull request (number): ")
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %v", err)
+	}
+
+	selection, err = strconv.Atoi(strings.TrimSpace(input))
+	if err != nil || selection < 1 || selection > len(prs) {
+		return fmt.Errorf("invalid selection")
+	}
+
+	selectedPR := prs[selection-1]
+	fmt.Printf("\nSelected pull request: #%d - %s\n", selectedPR.Number, selectedPR.Title)
+	fmt.Printf("URL: %s\n", selectedPR.URL)
+
+	// Display changed files
+	fmt.Println(repo.FormatChangedFiles(selectedPR.ChangedFiles))
+
+	// Get blame information
+	var blameInfo map[string]repo.BlameInfo
+	switch provider {
+	case "github":
+		blameInfo, err = repo.GetGitHubBlameInfo(authProvider.GetClient().(*github.Client), selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
+	case "gitlab":
+		blameInfo, err = repo.GetGitLabBlameInfo(authProvider.GetClient().(*gitlab.Client), selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Display blame information
+	fmt.Println(repo.FormatBlameInfo(blameInfo))
+
 	return nil
 }
 
