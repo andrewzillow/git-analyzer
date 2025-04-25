@@ -14,10 +14,9 @@ import (
 )
 
 type AnalysisRequest struct {
-	Type        repo.ProviderType `json:"type"`
-	Token       string            `json:"token"`
-	Repository  string            `json:"repository"`
-	PullRequest int               `json:"pullRequest"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Arguments   map[string]interface{} `json:"arguments"`
 }
 
 type AnalysisResponse struct {
@@ -57,85 +56,6 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
-	// Validate request and parse body
-	req, err := s.validate(w, r)
-	if err != nil {
-		return
-	}
-
-	// Create repository client based on provider
-	var repoClient repo.RepositoryClient
-	switch req.Type {
-	case repo.GitHub:
-		authProvider := auth.NewGitHubAuth(req.Token)
-		if err := authProvider.Authenticate(); err != nil {
-			sendErrorResponse(w, fmt.Sprintf("GitHub authentication failed: %v", err), http.StatusUnauthorized)
-			return
-		}
-		repoClient = repo.NewGitHubClient(authProvider.GetClient().(*github.Client))
-	case repo.GitLab:
-		authProvider := auth.NewGitLabAuth(req.Token)
-		if err := authProvider.Authenticate(); err != nil {
-			sendErrorResponse(w, fmt.Sprintf("GitLab authentication failed: %v", err), http.StatusUnauthorized)
-			return
-		}
-		repoClient = repo.NewGitLabClient(authProvider.GetClient().(*gitlab.Client))
-	}
-
-	// Get pull request information
-	prs, err := repoClient.ListPullRequests(req.Repository)
-	if err != nil {
-		sendErrorResponse(w, fmt.Sprintf("Failed to get pull requests: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Find the specific pull request
-	var selectedPR *repo.PullRequest
-	for _, pr := range prs {
-		if pr.Number == req.PullRequest {
-			selectedPR = &pr
-			break
-		}
-	}
-
-	if selectedPR == nil {
-		sendErrorResponse(w, fmt.Sprintf("Pull request #%d not found", req.PullRequest), http.StatusNotFound)
-		return
-	}
-
-	// Get blame information
-	blameInfo, err := repoClient.GetBlameInfo(req.Repository, req.PullRequest, selectedPR.ChangedFiles)
-	if err != nil {
-		sendErrorResponse(w, fmt.Sprintf("Failed to get blame information: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Convert blame info to a simpler map for JSON response
-	blameData := make(map[string]int)
-	for _, info := range blameInfo {
-		blameData[info.User] = info.Lines
-	}
-
-	// Return success response
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(AnalysisResponse{
-		Status:  "success",
-		Message: "Analysis completed",
-		Data:    blameData,
-	})
-}
-
-func sendErrorResponse(w http.ResponseWriter, errorMsg string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(AnalysisResponse{
-		Status: "error",
-		Error:  errorMsg,
-	})
-}
-
 func (s *Server) validate(w http.ResponseWriter, r *http.Request) (*AnalysisRequest, error) {
 	// Only allow POST requests
 	if r.Method != http.MethodPost {
@@ -169,22 +89,175 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request) (*AnalysisRequ
 	}
 
 	// Validate request
-	if !req.Type.IsValid() {
-		sendErrorResponse(w, fmt.Sprintf("Invalid type. Must be one of: %s, %s", repo.GitHub, repo.GitLab), http.StatusBadRequest)
-		return nil, fmt.Errorf("invalid type")
+	if req.Name != "git-blame" {
+		sendErrorResponse(w, "Invalid name. Only 'git-blame' is supported", http.StatusBadRequest)
+		return nil, fmt.Errorf("invalid name")
 	}
-	if req.Token == "" {
+
+	// Extract and validate arguments
+	var providerType repo.ProviderType
+	var token string
+	var repository string
+	var pullRequest int
+
+	if providerVal, ok := req.Arguments["provider"]; ok {
+		if str, ok := providerVal.(string); ok {
+			providerType = repo.ProviderType(str)
+			if !providerType.IsValid() {
+				sendErrorResponse(w, fmt.Sprintf("Invalid provider type. Must be one of: %s, %s", repo.GitHub, repo.GitLab), http.StatusBadRequest)
+				return nil, fmt.Errorf("invalid provider type")
+			}
+		} else {
+			sendErrorResponse(w, "Provider type must be a string", http.StatusBadRequest)
+			return nil, fmt.Errorf("invalid provider type format")
+		}
+	} else {
+		sendErrorResponse(w, "Provider is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("provider is required")
+	}
+
+	if tokenVal, ok := req.Arguments["token"]; ok {
+		if str, ok := tokenVal.(string); ok {
+			token = str
+		} else {
+			sendErrorResponse(w, "Token must be a string", http.StatusBadRequest)
+			return nil, fmt.Errorf("invalid token format")
+		}
+	} else {
 		sendErrorResponse(w, "Token is required", http.StatusBadRequest)
 		return nil, fmt.Errorf("token is required")
 	}
-	if req.Repository == "" {
+
+	if repoVal, ok := req.Arguments["repository"]; ok {
+		if str, ok := repoVal.(string); ok {
+			repository = str
+		} else {
+			sendErrorResponse(w, "Repository must be a string", http.StatusBadRequest)
+			return nil, fmt.Errorf("invalid repository format")
+		}
+	} else {
 		sendErrorResponse(w, "Repository is required", http.StatusBadRequest)
 		return nil, fmt.Errorf("repository is required")
 	}
-	if req.PullRequest <= 0 {
+
+	if prVal, ok := req.Arguments["pullRequest"]; ok {
+		if num, ok := prVal.(float64); ok {
+			pullRequest = int(num)
+		} else {
+			sendErrorResponse(w, "Pull request must be a number", http.StatusBadRequest)
+			return nil, fmt.Errorf("invalid pull request format")
+		}
+	} else {
+		sendErrorResponse(w, "Pull request is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("pull request is required")
+	}
+
+	// Validate required arguments
+	if token == "" {
+		sendErrorResponse(w, "Token is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("token is required")
+	}
+	if repository == "" {
+		sendErrorResponse(w, "Repository is required", http.StatusBadRequest)
+		return nil, fmt.Errorf("repository is required")
+	}
+	if pullRequest <= 0 {
 		sendErrorResponse(w, "Pull request number must be positive", http.StatusBadRequest)
 		return nil, fmt.Errorf("pull request number must be positive")
 	}
 
+	// Create a new request with the extracted values
+	req.Arguments = map[string]interface{}{
+		"provider":    providerType,
+		"token":       token,
+		"repository":  repository,
+		"pullRequest": pullRequest,
+	}
+
 	return &req, nil
+}
+
+func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	// Validate request and parse body
+	req, err := s.validate(w, r)
+	if err != nil {
+		return
+	}
+
+	// Extract arguments
+	providerType := req.Arguments["provider"].(repo.ProviderType)
+	token := req.Arguments["token"].(string)
+	repository := req.Arguments["repository"].(string)
+	pullRequest := req.Arguments["pullRequest"].(int)
+
+	// Create repository client based on provider
+	var repoClient repo.RepositoryClient
+	switch providerType {
+	case repo.GitHub:
+		authProvider := auth.NewGitHubAuth(token)
+		if err := authProvider.Authenticate(); err != nil {
+			sendErrorResponse(w, fmt.Sprintf("GitHub authentication failed: %v", err), http.StatusUnauthorized)
+			return
+		}
+		repoClient = repo.NewGitHubClient(authProvider.GetClient().(*github.Client))
+	case repo.GitLab:
+		authProvider := auth.NewGitLabAuth(token)
+		if err := authProvider.Authenticate(); err != nil {
+			sendErrorResponse(w, fmt.Sprintf("GitLab authentication failed: %v", err), http.StatusUnauthorized)
+			return
+		}
+		repoClient = repo.NewGitLabClient(authProvider.GetClient().(*gitlab.Client))
+	}
+
+	// Get pull request information
+	prs, err := repoClient.ListPullRequests(repository)
+	if err != nil {
+		sendErrorResponse(w, fmt.Sprintf("Failed to get pull requests: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the specific pull request
+	var selectedPR *repo.PullRequest
+	for _, pr := range prs {
+		if pr.Number == pullRequest {
+			selectedPR = &pr
+			break
+		}
+	}
+
+	if selectedPR == nil {
+		sendErrorResponse(w, fmt.Sprintf("Pull request #%d not found", pullRequest), http.StatusNotFound)
+		return
+	}
+
+	// Get blame information
+	blameInfo, err := repoClient.GetBlameInfo(repository, pullRequest, selectedPR.ChangedFiles)
+	if err != nil {
+		sendErrorResponse(w, fmt.Sprintf("Failed to get blame information: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert blame info to a simpler map for JSON response
+	blameData := make(map[string]int)
+	for _, info := range blameInfo {
+		blameData[info.User] = info.Lines
+	}
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(AnalysisResponse{
+		Status:  "success",
+		Message: "Analysis completed",
+		Data:    blameData,
+	})
+}
+
+func sendErrorResponse(w http.ResponseWriter, errorMsg string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(AnalysisResponse{
+		Status: "error",
+		Error:  errorMsg,
+	})
 }

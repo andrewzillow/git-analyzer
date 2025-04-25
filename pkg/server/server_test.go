@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/andrewweb/hackday/pkg/repo"
 )
 
 func TestServer_Validate(t *testing.T) {
@@ -22,11 +20,35 @@ func TestServer_Validate(t *testing.T) {
 		expectedError  string
 	}{
 		{
-			name:           "valid request",
-			method:         http.MethodPost,
-			contentType:    "application/json",
-			requestBody:    AnalysisRequest{Type: repo.GitHub, Token: "token", Repository: "owner/repo", PullRequest: 1},
+			name:        "valid request",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"token":       "token",
+					"repository":  "owner/repo",
+					"pullRequest": 1,
+				},
+			},
 			expectedStatus: http.StatusOK,
+		},
+		{
+			name:        "invalid name",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "invalid-name",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"token":       "token",
+					"repository":  "owner/repo",
+					"pullRequest": 1,
+				},
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "invalid name",
 		},
 		{
 			name:           "invalid method",
@@ -45,34 +67,64 @@ func TestServer_Validate(t *testing.T) {
 			expectedError:  "invalid content type",
 		},
 		{
-			name:           "invalid type",
-			method:         http.MethodPost,
-			contentType:    "application/json",
-			requestBody:    AnalysisRequest{Type: "invalid", Token: "token", Repository: "owner/repo", PullRequest: 1},
+			name:        "invalid provider type",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "invalid",
+					"token":       "token",
+					"repository":  "owner/repo",
+					"pullRequest": 1,
+				},
+			},
 			expectedStatus: http.StatusBadRequest,
-			expectedError:  "invalid type",
+			expectedError:  "invalid provider type",
 		},
 		{
-			name:           "missing token",
-			method:         http.MethodPost,
-			contentType:    "application/json",
-			requestBody:    AnalysisRequest{Type: repo.GitHub, Repository: "owner/repo", PullRequest: 1},
+			name:        "missing token",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"repository":  "owner/repo",
+					"pullRequest": 1,
+				},
+			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "token is required",
 		},
 		{
-			name:           "missing repository",
-			method:         http.MethodPost,
-			contentType:    "application/json",
-			requestBody:    AnalysisRequest{Type: repo.GitHub, Token: "token", PullRequest: 1},
+			name:        "missing repository",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"token":       "token",
+					"pullRequest": 1,
+				},
+			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "repository is required",
 		},
 		{
-			name:           "invalid pull request number",
-			method:         http.MethodPost,
-			contentType:    "application/json",
-			requestBody:    AnalysisRequest{Type: repo.GitHub, Token: "token", Repository: "owner/repo", PullRequest: 0},
+			name:        "invalid pull request number",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			requestBody: AnalysisRequest{
+				Name: "git-blame",
+				Arguments: map[string]interface{}{
+					"provider":    "github",
+					"token":       "token",
+					"repository":  "owner/repo",
+					"pullRequest": 0,
+				},
+			},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "pull request number must be positive",
 		},
