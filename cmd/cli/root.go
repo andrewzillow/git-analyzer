@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bufio"
@@ -20,8 +20,8 @@ var (
 )
 
 func init() {
-	RootCmd.PersistentFlags().StringVarP(&provider, "provider", "p", "", "Git provider (github or gitlab)")
-	RootCmd.PersistentFlags().StringVarP(&token, "token", "t", "", "Personal access token")
+	rootCmd.PersistentFlags().StringVarP(&provider, "provider", "p", "", "Git provider (github or gitlab)")
+	rootCmd.PersistentFlags().StringVarP(&token, "token", "t", "", "Personal access token")
 }
 
 func executeRoot(cmd *cobra.Command, args []string) error {
@@ -100,7 +100,7 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-var RootCmd = &cobra.Command{
+var rootCmd = &cobra.Command{
 	Use:   "repo-analyzer",
 	Short: "A tool to analyze GitHub and GitLab repositories",
 	Long:  `A CLI tool that allows authentication to GitHub or GitLab and repository analysis.`,
