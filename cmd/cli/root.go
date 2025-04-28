@@ -2,10 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/andrewweb/hackday/pkg/auth"
 	"github.com/andrewweb/hackday/pkg/repo"
@@ -22,9 +27,54 @@ var (
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&provider, "provider", "p", "", "Git provider (github or gitlab)")
 	rootCmd.PersistentFlags().StringVarP(&token, "token", "t", "", "Personal access token")
+
+	// Add subcommands
+	rootCmd.AddCommand(blameCmd)
+	rootCmd.AddCommand(logCmd)
+	rootCmd.AddCommand(serverCmd)
 }
 
-func executeRoot(cmd *cobra.Command, args []string) error {
+var blameCmd = &cobra.Command{
+	Use:   "blame",
+	Short: "Run git-blame analysis on a repository",
+	Long:  `Analyzes the blame information for files in a pull request, showing which authors modified which lines.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAnalysis("blame")
+	},
+}
+
+var logCmd = &cobra.Command{
+	Use:   "log",
+	Short: "Run git-log analysis on a repository",
+	Long:  `Runs code-maat analysis on the repository's git log.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAnalysis("log")
+	},
+}
+
+func splitRepoFullName(fullName string) (string, string, error) {
+	parts := strings.Split(fullName, "/")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid repository name format: %s. Expected format: owner/repo", fullName)
+	}
+	return parts[0], parts[1], nil
+}
+
+func runAnalysis(analysisType string) error {
+	// Get analysis type if not specified
+	if analysisType == "" {
+		fmt.Print("Select analysis type (blame/log): ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %v", err)
+		}
+		analysisType = strings.TrimSpace(strings.ToLower(input))
+		if analysisType != "blame" && analysisType != "log" {
+			return fmt.Errorf("invalid analysis type. Must be 'blame' or 'log'")
+		}
+	}
+
 	// Get provider if not specified
 	if provider == "" {
 		fmt.Print("Select provider (github/gitlab): ")
@@ -143,16 +193,111 @@ func executeRoot(cmd *cobra.Command, args []string) error {
 	// Display changed files
 	fmt.Println(repo.FormatChangedFiles(selectedPR.ChangedFiles))
 
-	// Get blame information
-	blameInfo, err := repoClient.GetBlameInfo(selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
-	if err != nil {
-		return err
+	// Run the selected analysis
+	switch analysisType {
+	case "blame":
+		// Get blame information
+		blameInfo, err := repoClient.GetBlameInfo(selectedRepo.FullName, selectedPR.Number, selectedPR.ChangedFiles)
+		if err != nil {
+			return err
+		}
+
+		// Display blame information
+		fmt.Println(repo.FormatBlameInfo(blameInfo))
+
+	case "log":
+		// Get commit history using GitHub API
+		ctx := context.Background()
+		owner, repoName, err := splitRepoFullName(selectedRepo.FullName)
+		if err != nil {
+			return fmt.Errorf("failed to parse repository name: %v", err)
+		}
+
+		// Get all commits for the repository
+		commits, err := repoClient.(*repo.GitHubClient).GetCommits(ctx, owner, repoName, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			return fmt.Errorf("failed to get commits: %v", err)
+		}
+
+		// Create a temporary directory for the log file
+		tempDir, err := os.MkdirTemp("", "git-log-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		// Format the commits in the required format for code-maat
+		var logContent strings.Builder
+		for _, commit := range commits {
+			// Get the commit details to get the changed files
+			commitDetails, err := repoClient.(*repo.GitHubClient).GetCommitDetails(ctx, owner, repoName, commit.GetSHA())
+			if err != nil {
+				return fmt.Errorf("failed to get commit details: %v", err)
+			}
+
+			// Write the commit header
+			logContent.WriteString(fmt.Sprintf("--%s--%s--%s\n",
+				commit.GetSHA()[:7],
+				commit.GetCommit().GetCommitter().GetDate().Format("2006-01-02"),
+				commit.GetCommit().GetCommitter().GetName()))
+
+			// Write the changed files
+			for _, file := range commitDetails.Files {
+				logContent.WriteString(fmt.Sprintf("%d\t%d\t%s\n",
+					file.GetAdditions(),
+					file.GetDeletions(),
+					file.GetFilename()))
+			}
+		}
+
+		// Write the log content to a file
+		logFile := filepath.Join(tempDir, "logfile.log")
+		if err := os.WriteFile(logFile, []byte(logContent.String()), 0644); err != nil {
+			return fmt.Errorf("failed to write log file: %v", err)
+		}
+
+		// Print the log file content for debugging
+		fmt.Println("\nLog file content:")
+		fmt.Println(logContent.String())
+
+		// Check if code-maat jar exists
+		jarPath := "code-maat-1.0.4-standalone.jar"
+		if _, err := os.Stat(jarPath); os.IsNotExist(err) {
+			return fmt.Errorf("code-maat jar file not found. Please download it from https://github.com/adamtornhill/code-maat/releases and place it in the current directory")
+		}
+
+		// First try a simpler analysis
+		fmt.Println("\nTrying simple analysis first...")
+		simpleCmd := exec.Command("java", "-jar", jarPath, "-l", logFile, "-c", "git2", "-a", "summary")
+		var stderr bytes.Buffer
+		simpleCmd.Stderr = &stderr
+		simpleOutput, err := simpleCmd.Output()
+		if err != nil {
+			fmt.Printf("Simple analysis failed: %v\nError output: %s\n", err, stderr.String())
+		} else {
+			fmt.Println("Simple analysis succeeded:")
+			fmt.Println(string(simpleOutput))
+		}
+
+		// Now try the fragmentation analysis
+		fmt.Println("\nTrying fragmentation analysis...")
+		codeMaatCmd := exec.Command("java", "-jar", jarPath, "-l", logFile, "-c", "git2", "-a", "fragmentation")
+		codeMaatCmd.Stderr = &stderr
+		codeMaatOutput, err := codeMaatCmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to run code-maat: %v\nError output: %s", err, stderr.String())
+		}
+
+		// Display the analysis results
+		fmt.Println("\nCode Maat Analysis Results:")
+		fmt.Println(string(codeMaatOutput))
 	}
 
-	// Display blame information
-	fmt.Println(repo.FormatBlameInfo(blameInfo))
-
 	return nil
+}
+
+func executeRoot(cmd *cobra.Command, args []string) error {
+	return runAnalysis("")
 }
 
 var rootCmd = &cobra.Command{

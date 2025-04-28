@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v45/github"
 	"github.com/xanzy/go-gitlab"
@@ -175,6 +176,26 @@ func (c *GitHubClient) GetBlameInfo(repoFullName string, prNumber int, files []s
 	}
 
 	return blameInfo, nil
+}
+
+// GetCommits returns all commits for a repository since a given date
+func (c *GitHubClient) GetCommits(ctx context.Context, owner, repo string, since time.Time) ([]*github.RepositoryCommit, error) {
+	commits, _, err := c.client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+		Since: since,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list commits: %v", err)
+	}
+	return commits, nil
+}
+
+// GetCommitDetails returns the details of a specific commit
+func (c *GitHubClient) GetCommitDetails(ctx context.Context, owner, repo, sha string) (*github.RepositoryCommit, error) {
+	commit, _, err := c.client.Repositories.GetCommit(ctx, owner, repo, sha, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit details: %v", err)
+	}
+	return commit, nil
 }
 
 // GitLabClient implements RepositoryClient for GitLab

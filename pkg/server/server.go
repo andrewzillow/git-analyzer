@@ -6,6 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/andrewweb/hackday/pkg/auth"
 	"github.com/andrewweb/hackday/pkg/repo"
@@ -19,10 +23,10 @@ type AnalysisRequest struct {
 }
 
 type AnalysisResponse struct {
-	Status  string         `json:"status"`
-	Message string         `json:"message"`
-	Data    map[string]int `json:"data,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	Status  string            `json:"status"`
+	Message string            `json:"message"`
+	Data    map[string]string `json:"data,omitempty"`
+	Error   string            `json:"error,omitempty"`
 }
 
 type Argument struct {
@@ -260,9 +264,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Convert blame info to a simpler map for JSON response
-		blameData := make(map[string]int)
+		blameData := make(map[string]string)
 		for _, info := range blameInfo {
-			blameData[info.User] = info.Lines
+			blameData[info.User] = fmt.Sprintf("%d", info.Lines)
 		}
 
 		// Return success response with blame data
@@ -275,12 +279,68 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case "git-log":
-		// Return success response without any analysis
+		// Create a temporary directory for the log files
+		tempDir, err := os.MkdirTemp("", "git-log-*")
+		if err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to create temporary directory: %v", err), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(tempDir)
+
+		// Clone the repository
+		cloneCmd := exec.Command("git", "clone", selectedPR.URL, tempDir)
+		if err := cloneCmd.Run(); err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to clone repository: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Change to the repository directory
+		if err := os.Chdir(tempDir); err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to change directory: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Run git log command
+		logFile := filepath.Join(tempDir, "logfile.log")
+		gitLogCmd := exec.Command("git", "log", "--all", "--numstat", "--date=short", "--pretty=format:--%h--%ad--%aN", "--no-renames", "--after=2024-01-01")
+		output, err := gitLogCmd.Output()
+		if err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to run git log: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Write git log output to file
+		if err := os.WriteFile(logFile, output, 0644); err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to write log file: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Run code-maat
+		codeMaatCmd := exec.Command("java", "-jar", "code-maat-1.0.4-standalone.jar", "-l", logFile, "-c", "git2", "-a", "fragmentation")
+		codeMaatOutput, err := codeMaatCmd.Output()
+		if err != nil {
+			sendErrorResponse(w, fmt.Sprintf("Failed to run code-maat: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Parse CSV output
+		lines := strings.Split(string(codeMaatOutput), "\n")
+		csvData := make(map[string]string)
+		for i, line := range lines {
+			if i == 0 {
+				csvData["header"] = line
+			} else if line != "" {
+				csvData[fmt.Sprintf("row_%d", i)] = line
+			}
+		}
+
+		// Return success response with CSV data
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(AnalysisResponse{
 			Status:  "success",
-			Message: "Git log request processed",
+			Message: "Git log analysis completed",
+			Data:    csvData,
 		})
 	}
 }
